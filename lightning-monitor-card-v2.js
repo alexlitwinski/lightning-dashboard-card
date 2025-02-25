@@ -167,6 +167,7 @@ class LightningMonitorCard extends HTMLElement {
     super();
     this.attachShadow({ mode: 'open' });
     this.lightningData = [];
+    this.lastDetectedEvent = null;
     this.config = {
       show_radar: true,
       show_recent: true,
@@ -181,6 +182,8 @@ class LightningMonitorCard extends HTMLElement {
   static getStubConfig() {
     return {
       entity: '',
+      distance_entity: '',
+      energy_entity: '',
       name: 'Monitor de Raios',
       show_radar: true,
       show_recent: true,
@@ -189,8 +192,9 @@ class LightningMonitorCard extends HTMLElement {
   }
 
   setConfig(config) {
-    if (!config.entity) {
-      throw new Error('Especifique uma entidade sensor de raios');
+    // Verifica se pelo menos a entidade principal ou as entidades específicas foram fornecidas
+    if (!config.entity && (!config.distance_entity || !config.energy_entity)) {
+      throw new Error('Especifique uma entidade sensor de raios ou entidades separadas para distância e energia');
     }
     
     this.config = {
@@ -230,23 +234,96 @@ class LightningMonitorCard extends HTMLElement {
   }
 
   updateData() {
-    if (!this._hass || !this.config.entity) return;
+    if (!this._hass) return;
 
-    const entityId = this.config.entity;
-    const stateObj = this._hass.states[entityId];
-
-    if (!stateObj) {
-      console.error(`Entidade ${entityId} não encontrada`);
-      return;
-    }
-
+    // Verificar modo de operação: entidade única ou entidades separadas
+    const useSeparateEntities = this.config.distance_entity && this.config.energy_entity;
+    
     try {
-      // Adapte isso conforme a estrutura dos seus dados
-      // Supondo que o sensor tenha uma lista de eventos de raios como atributo
-      if (stateObj.attributes.lightning_events) {
-        this.lightningData = JSON.parse(stateObj.attributes.lightning_events);
-      } else {
-        // Fallback para dados de exemplo se não houver dados reais
+      if (useSeparateEntities) {
+        // Modo com entidades separadas
+        const distanceEntityId = this.config.distance_entity;
+        const energyEntityId = this.config.energy_entity;
+        
+        const distanceObj = this._hass.states[distanceEntityId];
+        const energyObj = this._hass.states[energyEntityId];
+        
+        if (!distanceObj || !energyObj) {
+          console.error('Uma ou mais entidades não encontradas');
+          return;
+        }
+        
+        // Obter valores atuais
+        const distance = parseFloat(distanceObj.state);
+        const strength = parseFloat(energyObj.state);
+        
+        // Verificar se há um histórico armazenado
+        if (!this.lastDetectedEvent || 
+            distance !== this.lastDetectedEvent.distance || 
+            strength !== this.lastDetectedEvent.strength) {
+          
+          // Gerar um novo evento se os valores mudaram
+          const newEvent = {
+            id: Date.now(),
+            timestamp: new Date().toISOString(),
+            distance: distance,
+            strength: strength
+          };
+          
+          // Adicionar ao início do array
+          this.lightningData.unshift(newEvent);
+          
+          // Limitar tamanho do array (manter últimos 10 eventos)
+          if (this.lightningData.length > 10) {
+            this.lightningData = this.lightningData.slice(0, 10);
+          }
+          
+          // Armazenar último evento detectado
+          this.lastDetectedEvent = newEvent;
+        }
+      } else if (this.config.entity) {
+        // Modo com entidade única
+        const entityId = this.config.entity;
+        const stateObj = this._hass.states[entityId];
+        
+        if (!stateObj) {
+          console.error(`Entidade ${entityId} não encontrada`);
+          return;
+        }
+        
+        // Verificar se o sensor tem eventos como atributo
+        if (stateObj.attributes.lightning_events) {
+          this.lightningData = JSON.parse(stateObj.attributes.lightning_events);
+        } else {
+          // Obter valores do estado e atributos
+          const lastEvent = {
+            id: Date.now(),
+            timestamp: new Date().toISOString(),
+            distance: parseFloat(stateObj.state) || 0,
+            strength: stateObj.attributes.energy || stateObj.attributes.strength || 50
+          };
+          
+          // Verificar se é um novo evento
+          if (!this.lastDetectedEvent || 
+              lastEvent.distance !== this.lastDetectedEvent.distance || 
+              lastEvent.strength !== this.lastDetectedEvent.strength) {
+            
+            // Adicionar ao início do array
+            this.lightningData.unshift(lastEvent);
+            
+            // Limitar tamanho do array
+            if (this.lightningData.length > 10) {
+              this.lightningData = this.lightningData.slice(0, 10);
+            }
+            
+            // Armazenar último evento detectado
+            this.lastDetectedEvent = lastEvent;
+          }
+        }
+      }
+      
+      // Se não houver dados, usar dados de exemplo
+      if (this.lightningData.length === 0) {
         this.lightningData = [
           { id: 1, timestamp: new Date().toISOString(), distance: 8.3, strength: 65 },
           { id: 2, timestamp: new Date(Date.now() - 2*60000).toISOString(), distance: 12.1, strength: 42 },
