@@ -1,4 +1,48 @@
-/**
+updateData() {
+    if (!this._hass) return;
+
+    // Verificar modo de operação: entidade única ou entidades separadas
+    const useSeparateEntities = this.config.distance_entity && this.config.energy_entity;
+    
+    try {
+      if (useSeparateEntities) {
+        // Modo com entidades separadas
+        const distanceEntityId = this.config.distance_entity;
+        const energyEntityId = this.config.energy_entity;
+        
+        const distanceObj = this._hass.states[distanceEntityId];
+        const energyObj = this._hass.states[energyEntityId];
+        
+        if (!distanceObj || !energyObj) {
+          console.error('Uma ou mais entidades não encontradas');
+          return;
+        }
+        
+        // Obter valores atuais
+        const distance = parseFloat(distanceObj.state);
+        const strength = parseFloat(energyObj.state);
+        const now = new Date();
+        
+        // Apenas adicionar novo evento se as entidades tiverem valores numéricos válidos
+        if (!isNaN(distance) && !isNaN(strength)) {
+          
+          // Verificar se temos um evento anterior
+          const lastEvent = this.lightningData.length > 0 ? this.lightningData[0] : null;
+          
+          // Verificar se os valores são diferentes o suficiente do último evento
+          const isNewValue = !lastEvent || 
+            Math.abs(distance - lastEvent.distance) > 0.5 || 
+            Math.abs(strength - lastEvent.strength) > 5;
+          
+          // Verificar se passou tempo suficiente desde o último evento (5 segundos)
+          const timeElapsed = !lastEvent || 
+            (now.getTime() - new Date(lastEvent.timestamp).getTime()) > 5000;
+            
+          // Adicionar novo evento apenas se for diferente e passou tempo suficiente
+          if (isNewValue && timeElapsed) {
+            const newEvent = {
+              id: now.getTime(),
+              timestamp: now./**
  * Lightning Monitor Card
  * 
  * Autor: Seu Nome
@@ -166,10 +210,27 @@ class LightningMonitorCard extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: 'open' });
+    
+    // Inicializar o array de dados de raios
     this.lightningData = [];
+    
+    // Tentar recuperar dados salvos anteriormente
+    try {
+      const savedData = localStorage.getItem('lightning-monitor-data');
+      if (savedData) {
+        this.lightningData = JSON.parse(savedData);
+        console.log('Dados de raios carregados do localStorage:', this.lightningData);
+      }
+    } catch (e) {
+      console.error('Erro ao carregar dados salvos:', e);
+    }
+    
+    // Outras variáveis de estado
     this.lastDetectedEvent = null;
     this.lastEventTimestamp = 0;
-    this.loadedExampleData = false;
+    this.loadedExampleData = this.lightningData.length > 0;
+    
+    // Configuração padrão
     this.config = {
       show_radar: true,
       show_recent: true,
@@ -207,16 +268,125 @@ class LightningMonitorCard extends HTMLElement {
     this.render();
   }
 
+  // Quando o hass é atualizado
   set hass(hass) {
-    const oldHass = this._hass;
+    const firstUpdate = !this._hass;
     this._hass = hass;
     
-    // Se for a primeira vez que recebemos o hass, buscar o histórico
-    if (!oldHass && hass) {
+    // Primeiro update, carregar o histórico
+    if (firstUpdate) {
+      console.log('Primeiro update, buscando histórico...');
       this.fetchHistory();
-    } else {
-      this.updateData();
-      this.render();
+    }
+    
+    // Atualizar dados atuais
+    if (this._hass) {
+      this.updateCurrentValues();
+    }
+    
+    // Renderizar os dados
+    this.render();
+  }
+  
+  // Atualizar valores atuais (pode adicionar um novo evento)
+  updateCurrentValues() {
+    // Verificar se estamos usando entidades separadas
+    const useSeparateEntities = this.config.distance_entity && this.config.energy_entity;
+    
+    try {
+      if (useSeparateEntities) {
+        // Obter valores das duas entidades
+        const distanceObj = this._hass.states[this.config.distance_entity];
+        const energyObj = this._hass.states[this.config.energy_entity];
+        
+        if (!distanceObj || !energyObj) {
+          console.warn('Uma ou mais entidades não encontradas');
+          return;
+        }
+        
+        const distance = parseFloat(distanceObj.state);
+        const energy = parseFloat(energyObj.state);
+        
+        // Verificar se são valores válidos
+        if (isNaN(distance) || isNaN(energy)) {
+          console.warn('Valores inválidos de distância ou energia');
+          return;
+        }
+        
+        // Verificar se já temos eventos no histórico
+        if (this.lightningData.length > 0) {
+          const lastEvent = this.lightningData[0];
+          
+          // Verificar se os valores atuais são diferentes do último evento
+          if (Math.abs(distance - lastEvent.distance) > 0.5 || 
+              Math.abs(energy - lastEvent.strength) > 5) {
+            
+            // Adicionar um novo evento no início do array
+            const now = new Date();
+            const newEvent = {
+              id: now.getTime(),
+              timestamp: now.toISOString(),
+              distance: distance,
+              strength: energy
+            };
+            
+            this.lightningData.unshift(newEvent);
+            console.log('Novo evento adicionado:', newEvent);
+            
+            // Limitar o número de eventos
+            const maxEntries = this.config.max_entries || 4;
+            if (this.lightningData.length > maxEntries) {
+              this.lightningData = this.lightningData.slice(0, maxEntries);
+            }
+          }
+        }
+      } else if (this.config.entity) {
+        // Modo de entidade única
+        const stateObj = this._hass.states[this.config.entity];
+        
+        if (!stateObj) {
+          console.warn('Entidade não encontrada');
+          return;
+        }
+        
+        const state = parseFloat(stateObj.state);
+        let strength = 50;
+        
+        if (stateObj.attributes) {
+          strength = parseFloat(stateObj.attributes.energy) || 
+                   parseFloat(stateObj.attributes.strength) || 
+                   50;
+        }
+        
+        // Verificar se já temos eventos no histórico
+        if (this.lightningData.length > 0) {
+          const lastEvent = this.lightningData[0];
+          
+          // Verificar se o valor atual é diferente do último evento
+          if (Math.abs(state - lastEvent.distance) > 0.5) {
+            
+            // Adicionar um novo evento no início do array
+            const now = new Date();
+            const newEvent = {
+              id: now.getTime(),
+              timestamp: now.toISOString(),
+              distance: state,
+              strength: strength
+            };
+            
+            this.lightningData.unshift(newEvent);
+            console.log('Novo evento adicionado:', newEvent);
+            
+            // Limitar o número de eventos
+            const maxEntries = this.config.max_entries || 4;
+            if (this.lightningData.length > maxEntries) {
+              this.lightningData = this.lightningData.slice(0, maxEntries);
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Erro ao atualizar valores atuais:', error);
     }
   }
 
