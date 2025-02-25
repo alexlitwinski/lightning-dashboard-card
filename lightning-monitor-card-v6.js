@@ -1,51 +1,6 @@
-updateData() {
-    if (!this._hass) return;
-
-    // Verificar modo de operação: entidade única ou entidades separadas
-    const useSeparateEntities = this.config.distance_entity && this.config.energy_entity;
-    
-    try {
-      if (useSeparateEntities) {
-        // Modo com entidades separadas
-        const distanceEntityId = this.config.distance_entity;
-        const energyEntityId = this.config.energy_entity;
-        
-        const distanceObj = this._hass.states[distanceEntityId];
-        const energyObj = this._hass.states[energyEntityId];
-        
-        if (!distanceObj || !energyObj) {
-          console.error('Uma ou mais entidades não encontradas');
-          return;
-        }
-        
-        // Obter valores atuais
-        const distance = parseFloat(distanceObj.state);
-        const strength = parseFloat(energyObj.state);
-        const now = new Date();
-        
-        // Apenas adicionar novo evento se as entidades tiverem valores numéricos válidos
-        if (!isNaN(distance) && !isNaN(strength)) {
-          
-          // Verificar se temos um evento anterior
-          const lastEvent = this.lightningData.length > 0 ? this.lightningData[0] : null;
-          
-          // Verificar se os valores são diferentes o suficiente do último evento
-          const isNewValue = !lastEvent || 
-            Math.abs(distance - lastEvent.distance) > 0.5 || 
-            Math.abs(strength - lastEvent.strength) > 5;
-          
-          // Verificar se passou tempo suficiente desde o último evento (5 segundos)
-          const timeElapsed = !lastEvent || 
-            (now.getTime() - new Date(lastEvent.timestamp).getTime()) > 5000;
-            
-          // Adicionar novo evento apenas se for diferente e passou tempo suficiente
-          if (isNewValue && timeElapsed) {
-            const newEvent = {
-              id: now.getTime(),
-              timestamp: now./**
+/**
  * Lightning Monitor Card
  * 
- * Autor: Seu Nome
  * Versão: 1.0.0
  * 
  * Um cartão personalizado para Home Assistant que exibe de forma visual
@@ -64,6 +19,8 @@ class LightningMonitorCardEditor extends HTMLElement {
   setConfig(config) {
     this._config = config || {
       entity: '',
+      distance_entity: '',
+      energy_entity: '',
       name: 'Monitor de Raios',
       show_radar: true,
       show_recent: true,
@@ -74,6 +31,14 @@ class LightningMonitorCardEditor extends HTMLElement {
   // Getters para configuração
   get _entity() {
     return this._config.entity || '';
+  }
+
+  get _distance_entity() {
+    return this._config.distance_entity || '';
+  }
+  
+  get _energy_entity() {
+    return this._config.energy_entity || '';
   }
 
   get _name() {
@@ -122,9 +87,7 @@ class LightningMonitorCardEditor extends HTMLElement {
     if (!this.hass) return [];
     
     return Object.keys(this.hass.states)
-      .filter(entityId => entityId.startsWith('sensor.') && 
-              (entityId.includes('raio') || entityId.includes('lightning') || 
-               entityId.includes('thunder') || entityId.includes('trovao')))
+      .filter(entityId => entityId.startsWith('sensor.'))
       .map(entityId => ({
         value: entityId,
         name: this.hass.states[entityId].attributes.friendly_name || entityId,
@@ -140,15 +103,52 @@ class LightningMonitorCardEditor extends HTMLElement {
 
     return html`
       <div class="card-config">
+        <div class="options-section">
+          <h3>Modo de Configuração</h3>
+          <p class="option-description">Escolha entre uma entidade única ou entidades separadas para distância e energia</p>
+        </div>
+        
         <div class="config-row">
           <ha-select
-            label="Entidade de Sensor"
+            label="Entidade de Sensor (Única)"
             .value=${this._entity}
             @selected=${this._valueChanged}
             config-value="entity"
-            required
           >
             <ha-list-item value="">Selecione uma entidade</ha-list-item>
+            ${entities.map(entity => html`
+              <ha-list-item .value=${entity.value}>${entity.name}</ha-list-item>
+            `)}
+          </ha-select>
+        </div>
+        
+        <div class="options-section">
+          <h3>OU</h3>
+          <p class="option-description">Configurar sensores separados</p>
+        </div>
+        
+        <div class="config-row">
+          <ha-select
+            label="Entidade de Distância do Raio"
+            .value=${this._distance_entity}
+            @selected=${this._valueChanged}
+            config-value="distance_entity"
+          >
+            <ha-list-item value="">Selecione a entidade de distância</ha-list-item>
+            ${entities.map(entity => html`
+              <ha-list-item .value=${entity.value}>${entity.name}</ha-list-item>
+            `)}
+          </ha-select>
+        </div>
+        
+        <div class="config-row">
+          <ha-select
+            label="Entidade de Energia do Raio"
+            .value=${this._energy_entity}
+            @selected=${this._valueChanged}
+            config-value="energy_entity"
+          >
+            <ha-list-item value="">Selecione a entidade de energia</ha-list-item>
             ${entities.map(entity => html`
               <ha-list-item .value=${entity.value}>${entity.name}</ha-list-item>
             `)}
@@ -228,7 +228,6 @@ class LightningMonitorCard extends HTMLElement {
     // Outras variáveis de estado
     this.lastDetectedEvent = null;
     this.lastEventTimestamp = 0;
-    this.loadedExampleData = this.lightningData.length > 0;
     
     // Configuração padrão
     this.config = {
@@ -268,126 +267,38 @@ class LightningMonitorCard extends HTMLElement {
     this.render();
   }
 
+  // Conectar ao Home Assistant
+  connectedCallback() {
+    super.connectedCallback && super.connectedCallback();
+    
+    // Configurar atualização periódica
+    this._interval = setInterval(() => {
+      if (this._hass) {
+        this.updateData();
+        this.render();
+      }
+    }, 30000); // Atualiza a cada 30 segundos
+  }
+  
+  // Chamado quando o componente é desconectado
+  disconnectedCallback() {
+    super.disconnectedCallback && super.disconnectedCallback();
+    
+    // Limpar o intervalo para evitar vazamento de memória
+    if (this._interval) {
+      clearInterval(this._interval);
+      this._interval = null;
+    }
+  }
+
   // Quando o hass é atualizado
   set hass(hass) {
     const firstUpdate = !this._hass;
     this._hass = hass;
     
-    // Primeiro update, carregar o histórico
-    if (firstUpdate) {
-      console.log('Primeiro update, buscando histórico...');
-      this.fetchHistory();
-    }
-    
-    // Atualizar dados atuais
-    if (this._hass) {
-      this.updateCurrentValues();
-    }
-    
-    // Renderizar os dados
+    // Atualizar dados e renderizar
+    this.updateData();
     this.render();
-  }
-  
-  // Atualizar valores atuais (pode adicionar um novo evento)
-  updateCurrentValues() {
-    // Verificar se estamos usando entidades separadas
-    const useSeparateEntities = this.config.distance_entity && this.config.energy_entity;
-    
-    try {
-      if (useSeparateEntities) {
-        // Obter valores das duas entidades
-        const distanceObj = this._hass.states[this.config.distance_entity];
-        const energyObj = this._hass.states[this.config.energy_entity];
-        
-        if (!distanceObj || !energyObj) {
-          console.warn('Uma ou mais entidades não encontradas');
-          return;
-        }
-        
-        const distance = parseFloat(distanceObj.state);
-        const energy = parseFloat(energyObj.state);
-        
-        // Verificar se são valores válidos
-        if (isNaN(distance) || isNaN(energy)) {
-          console.warn('Valores inválidos de distância ou energia');
-          return;
-        }
-        
-        // Verificar se já temos eventos no histórico
-        if (this.lightningData.length > 0) {
-          const lastEvent = this.lightningData[0];
-          
-          // Verificar se os valores atuais são diferentes do último evento
-          if (Math.abs(distance - lastEvent.distance) > 0.5 || 
-              Math.abs(energy - lastEvent.strength) > 5) {
-            
-            // Adicionar um novo evento no início do array
-            const now = new Date();
-            const newEvent = {
-              id: now.getTime(),
-              timestamp: now.toISOString(),
-              distance: distance,
-              strength: energy
-            };
-            
-            this.lightningData.unshift(newEvent);
-            console.log('Novo evento adicionado:', newEvent);
-            
-            // Limitar o número de eventos
-            const maxEntries = this.config.max_entries || 4;
-            if (this.lightningData.length > maxEntries) {
-              this.lightningData = this.lightningData.slice(0, maxEntries);
-            }
-          }
-        }
-      } else if (this.config.entity) {
-        // Modo de entidade única
-        const stateObj = this._hass.states[this.config.entity];
-        
-        if (!stateObj) {
-          console.warn('Entidade não encontrada');
-          return;
-        }
-        
-        const state = parseFloat(stateObj.state);
-        let strength = 50;
-        
-        if (stateObj.attributes) {
-          strength = parseFloat(stateObj.attributes.energy) || 
-                   parseFloat(stateObj.attributes.strength) || 
-                   50;
-        }
-        
-        // Verificar se já temos eventos no histórico
-        if (this.lightningData.length > 0) {
-          const lastEvent = this.lightningData[0];
-          
-          // Verificar se o valor atual é diferente do último evento
-          if (Math.abs(state - lastEvent.distance) > 0.5) {
-            
-            // Adicionar um novo evento no início do array
-            const now = new Date();
-            const newEvent = {
-              id: now.getTime(),
-              timestamp: now.toISOString(),
-              distance: state,
-              strength: strength
-            };
-            
-            this.lightningData.unshift(newEvent);
-            console.log('Novo evento adicionado:', newEvent);
-            
-            // Limitar o número de eventos
-            const maxEntries = this.config.max_entries || 4;
-            if (this.lightningData.length > maxEntries) {
-              this.lightningData = this.lightningData.slice(0, maxEntries);
-            }
-          }
-        }
-      }
-    } catch (error) {
-      console.error('Erro ao atualizar valores atuais:', error);
-    }
   }
 
   // Formatar horário
@@ -412,6 +323,7 @@ class LightningMonitorCard extends HTMLElement {
     return 'icon-small';
   }
 
+  // Atualizar dados
   updateData() {
     if (!this._hass) return;
 
@@ -475,6 +387,13 @@ class LightningMonitorCard extends HTMLElement {
           // Armazenar último evento detectado
           this.lastDetectedEvent = newEvent;
           
+          // Salvar dados no localStorage
+          try {
+            localStorage.setItem('lightning-monitor-data', JSON.stringify(this.lightningData));
+          } catch (e) {
+            console.error('Erro ao salvar dados:', e);
+          }
+          
           // Limitar o tamanho da lista ao número máximo configurado (default: 4)
           const maxEntries = this.config.max_entries || 4;
           if (this.lightningData.length > maxEntries) {
@@ -495,13 +414,20 @@ class LightningMonitorCard extends HTMLElement {
         }
         
         // Verificar se o sensor tem eventos como atributo
-        if (stateObj.attributes.lightning_events) {
-          this.lightningData = JSON.parse(stateObj.attributes.lightning_events);
-          
-          // Limitar o tamanho da lista ao número máximo configurado
-          const maxEntries = this.config.max_entries || 4;
-          if (this.lightningData.length > maxEntries) {
-            this.lightningData = this.lightningData.slice(0, maxEntries);
+        if (stateObj.attributes && stateObj.attributes.lightning_events) {
+          try {
+            const events = JSON.parse(stateObj.attributes.lightning_events);
+            if (Array.isArray(events)) {
+              this.lightningData = events;
+              
+              // Limitar o tamanho da lista ao número máximo configurado
+              const maxEntries = this.config.max_entries || 4;
+              if (this.lightningData.length > maxEntries) {
+                this.lightningData = this.lightningData.slice(0, maxEntries);
+              }
+            }
+          } catch (e) {
+            console.error('Erro ao processar dados JSON:', e);
           }
         } else {
           const now = new Date();
@@ -514,8 +440,9 @@ class LightningMonitorCard extends HTMLElement {
           
           // Obter valores do estado e atributos
           const distance = parseFloat(stateObj.state) || 0;
-          const strength = parseFloat(stateObj.attributes.energy) || 
-                          parseFloat(stateObj.attributes.strength) || 50;
+          const strength = stateObj.attributes ? 
+                          (parseFloat(stateObj.attributes.energy) || 
+                           parseFloat(stateObj.attributes.strength) || 50) : 50;
           
           // Verificar mudanças significativas nos valores
           const significantChange = !this.lastDetectedEvent || 
@@ -544,6 +471,13 @@ class LightningMonitorCard extends HTMLElement {
             // Armazenar último evento detectado
             this.lastDetectedEvent = lastEvent;
             
+            // Salvar dados no localStorage
+            try {
+              localStorage.setItem('lightning-monitor-data', JSON.stringify(this.lightningData));
+            } catch (e) {
+              console.error('Erro ao salvar dados:', e);
+            }
+            
             // Limitar o tamanho da lista ao número máximo configurado
             const maxEntries = this.config.max_entries || 4;
             if (this.lightningData.length > maxEntries) {
@@ -556,19 +490,53 @@ class LightningMonitorCard extends HTMLElement {
         }
       }
       
-      // Se não houver dados, usar dados de exemplo apenas na primeira carga
-      if (this.lightningData.length === 0 && !this.loadedExampleData) {
-        this.lightningData = [
-          { id: 1, timestamp: new Date().toISOString(), distance: 8.3, strength: 65 },
-          { id: 2, timestamp: new Date(Date.now() - 2*60000).toISOString(), distance: 12.1, strength: 42 },
-          { id: 3, timestamp: new Date(Date.now() - 7*60000).toISOString(), distance: 3.2, strength: 89 },
-          { id: 4, timestamp: new Date(Date.now() - 13*60000).toISOString(), distance: 15.7, strength: 38 }
-        ];
-        this.loadedExampleData = true;
+      // Se não houver dados, criar alguns dados de exemplo
+      if (this.lightningData.length === 0) {
+        this.loadExampleData();
       }
     } catch (e) {
       console.error("Erro ao processar dados do sensor:", e);
     }
+  }
+  
+  // Carregar dados de exemplo quando não há dados reais
+  loadExampleData() {
+    console.log('Carregando dados de exemplo');
+    
+    const now = new Date();
+    
+    this.lightningData = [
+      { 
+        id: now.getTime(), 
+        timestamp: now.toISOString(), 
+        distance: 8.3, 
+        strength: 65 
+      },
+      { 
+        id: now.getTime() - 300000, 
+        timestamp: new Date(now.getTime() - 300000).toISOString(), 
+        distance: 12.1, 
+        strength: 42 
+      }
+    ];
+    
+    // Adicionar mais exemplos até atingir o número de entradas configurado
+    const maxEntries = this.config.max_entries || 4;
+    
+    for (let i = 2; i < maxEntries && i < 5; i++) {
+      const timeOffset = (i + 1) * 600000; // Cada exemplo é 10 minutos mais antigo
+      const distance = 5 + Math.random() * 15;
+      const strength = 30 + Math.random() * 70;
+      
+      this.lightningData.push({
+        id: now.getTime() - timeOffset,
+        timestamp: new Date(now.getTime() - timeOffset).toISOString(),
+        distance: distance,
+        strength: strength
+      });
+    }
+    
+    console.log('Dados de exemplo carregados:', this.lightningData);
   }
 
   render() {
