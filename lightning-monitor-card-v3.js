@@ -208,9 +208,16 @@ class LightningMonitorCard extends HTMLElement {
   }
 
   set hass(hass) {
+    const oldHass = this._hass;
     this._hass = hass;
-    this.updateData();
-    this.render();
+    
+    // Se for a primeira vez que recebemos o hass, buscar o histórico
+    if (!oldHass && hass) {
+      this.fetchHistory();
+    } else {
+      this.updateData();
+      this.render();
+    }
   }
 
   // Formatar horário
