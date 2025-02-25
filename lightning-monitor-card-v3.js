@@ -168,6 +168,8 @@ class LightningMonitorCard extends HTMLElement {
     this.attachShadow({ mode: 'open' });
     this.lightningData = [];
     this.lastDetectedEvent = null;
+    this.lastEventTimestamp = 0;
+    this.loadedExampleData = false;
     this.config = {
       show_radar: true,
       show_recent: true,
@@ -256,16 +258,33 @@ class LightningMonitorCard extends HTMLElement {
         // Obter valores atuais
         const distance = parseFloat(distanceObj.state);
         const strength = parseFloat(energyObj.state);
+        const now = new Date();
         
-        // Verificar se há um histórico armazenado
-        if (!this.lastDetectedEvent || 
-            distance !== this.lastDetectedEvent.distance || 
-            strength !== this.lastDetectedEvent.strength) {
-          
-          // Gerar um novo evento se os valores mudaram
+        // Inicializar lastEventTimestamp se não existir
+        if (!this.lastEventTimestamp) {
+          this.lastEventTimestamp = 0;
+        }
+        
+        // Somente registrar um novo evento se:
+        // 1. Os valores mudaram significativamente OU
+        // 2. Passou um tempo mínimo (30 segundos) desde o último evento
+        const currentTimestamp = now.getTime();
+        const minTimeDiff = 30000; // 30 segundos em milissegundos
+        
+        // Verificar mudanças significativas nos valores
+        const significantChange = !this.lastDetectedEvent || 
+            Math.abs(distance - this.lastDetectedEvent.distance) > 0.5 || 
+            Math.abs(strength - this.lastDetectedEvent.strength) > 5;
+            
+        // Verificar tempo mínimo desde o último evento
+        const timeElapsed = currentTimestamp - this.lastEventTimestamp > minTimeDiff;
+        
+        // Criar novo evento se houver mudança significativa ou tempo suficiente passou
+        if (significantChange && timeElapsed) {
+          // Gerar um novo evento
           const newEvent = {
-            id: Date.now(),
-            timestamp: new Date().toISOString(),
+            id: currentTimestamp,
+            timestamp: now.toISOString(),
             distance: distance,
             strength: strength
           };
@@ -273,13 +292,20 @@ class LightningMonitorCard extends HTMLElement {
           // Adicionar ao início do array
           this.lightningData.unshift(newEvent);
           
-          // Limitar tamanho do array (manter últimos 10 eventos)
-          if (this.lightningData.length > 10) {
-            this.lightningData = this.lightningData.slice(0, 10);
-          }
+          // Atualizar timestamp do último evento
+          this.lastEventTimestamp = currentTimestamp;
           
           // Armazenar último evento detectado
           this.lastDetectedEvent = newEvent;
+          
+          // Limitar o tamanho da lista ao número máximo configurado (default: 4)
+          const maxEntries = this.config.max_entries || 4;
+          if (this.lightningData.length > maxEntries) {
+            this.lightningData = this.lightningData.slice(0, maxEntries);
+          }
+          
+          console.log('Novo evento de raio registrado:', newEvent);
+          console.log('Total de eventos no histórico:', this.lightningData.length);
         }
       } else if (this.config.entity) {
         // Modo com entidade única
@@ -294,43 +320,74 @@ class LightningMonitorCard extends HTMLElement {
         // Verificar se o sensor tem eventos como atributo
         if (stateObj.attributes.lightning_events) {
           this.lightningData = JSON.parse(stateObj.attributes.lightning_events);
-        } else {
-          // Obter valores do estado e atributos
-          const lastEvent = {
-            id: Date.now(),
-            timestamp: new Date().toISOString(),
-            distance: parseFloat(stateObj.state) || 0,
-            strength: stateObj.attributes.energy || stateObj.attributes.strength || 50
-          };
           
-          // Verificar se é um novo evento
-          if (!this.lastDetectedEvent || 
-              lastEvent.distance !== this.lastDetectedEvent.distance || 
-              lastEvent.strength !== this.lastDetectedEvent.strength) {
+          // Limitar o tamanho da lista ao número máximo configurado
+          const maxEntries = this.config.max_entries || 4;
+          if (this.lightningData.length > maxEntries) {
+            this.lightningData = this.lightningData.slice(0, maxEntries);
+          }
+        } else {
+          const now = new Date();
+          const currentTimestamp = now.getTime();
+          
+          // Inicializar lastEventTimestamp se não existir
+          if (!this.lastEventTimestamp) {
+            this.lastEventTimestamp = 0;
+          }
+          
+          // Obter valores do estado e atributos
+          const distance = parseFloat(stateObj.state) || 0;
+          const strength = parseFloat(stateObj.attributes.energy) || 
+                          parseFloat(stateObj.attributes.strength) || 50;
+          
+          // Verificar mudanças significativas nos valores
+          const significantChange = !this.lastDetectedEvent || 
+              Math.abs(distance - this.lastDetectedEvent.distance) > 0.5 || 
+              Math.abs(strength - this.lastDetectedEvent.strength) > 5;
+              
+          // Verificar tempo mínimo desde o último evento
+          const minTimeDiff = 30000; // 30 segundos
+          const timeElapsed = currentTimestamp - this.lastEventTimestamp > minTimeDiff;
+          
+          // Criar novo evento se houver mudança significativa ou tempo suficiente passou
+          if (significantChange && timeElapsed) {
+            const lastEvent = {
+              id: currentTimestamp,
+              timestamp: now.toISOString(),
+              distance: distance,
+              strength: strength
+            };
             
             // Adicionar ao início do array
             this.lightningData.unshift(lastEvent);
             
-            // Limitar tamanho do array
-            if (this.lightningData.length > 10) {
-              this.lightningData = this.lightningData.slice(0, 10);
-            }
+            // Atualizar timestamp do último evento
+            this.lastEventTimestamp = currentTimestamp;
             
             // Armazenar último evento detectado
             this.lastDetectedEvent = lastEvent;
+            
+            // Limitar o tamanho da lista ao número máximo configurado
+            const maxEntries = this.config.max_entries || 4;
+            if (this.lightningData.length > maxEntries) {
+              this.lightningData = this.lightningData.slice(0, maxEntries);
+            }
+            
+            console.log('Novo evento de raio registrado:', lastEvent);
+            console.log('Total de eventos no histórico:', this.lightningData.length);
           }
         }
       }
       
-      // Se não houver dados, usar dados de exemplo
-      if (this.lightningData.length === 0) {
+      // Se não houver dados, usar dados de exemplo apenas na primeira carga
+      if (this.lightningData.length === 0 && !this.loadedExampleData) {
         this.lightningData = [
           { id: 1, timestamp: new Date().toISOString(), distance: 8.3, strength: 65 },
           { id: 2, timestamp: new Date(Date.now() - 2*60000).toISOString(), distance: 12.1, strength: 42 },
           { id: 3, timestamp: new Date(Date.now() - 7*60000).toISOString(), distance: 3.2, strength: 89 },
-          { id: 4, timestamp: new Date(Date.now() - 13*60000).toISOString(), distance: 15.7, strength: 38 },
-          { id: 5, timestamp: new Date(Date.now() - 20*60000).toISOString(), distance: 5.1, strength: 72 }
+          { id: 4, timestamp: new Date(Date.now() - 13*60000).toISOString(), distance: 15.7, strength: 38 }
         ];
+        this.loadedExampleData = true;
       }
     } catch (e) {
       console.error("Erro ao processar dados do sensor:", e);
