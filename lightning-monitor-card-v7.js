@@ -899,9 +899,9 @@ class LightningMonitorCard extends HTMLElement {
   }
 }
 
-customElements.define('lightning-monitor-card', LightningMonitorCard);
+customElements.define('lightningmonitorcard', LightningMonitorCard);
 
-// Disponibilize o cartão para o HACS
+// Registre o componente no HACS de forma mais explícita
 window.customCards = window.customCards || [];
 window.customCards.push({
   type: 'lightning-monitor-card',
