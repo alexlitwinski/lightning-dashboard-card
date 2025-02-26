@@ -5,6 +5,7 @@ class LightningMonitorCard extends HTMLElement {
     this.lightningData = [];
     this.lastValues = {}; // Para rastrear valores anteriores
     this.lastUpdateTime = 0; // Para rastrear quando o último evento foi registrado
+    this.initialized = false;
   }
 
   setConfig(config) {
@@ -18,12 +19,49 @@ class LightningMonitorCard extends HTMLElement {
     const oldHass = this._hass;
     this._hass = hass;
     
-    // Apenas atualiza se for a primeira vez ou se passar tempo suficiente
+    // Inicializar na primeira vez
+    if (!this.initialized && this._hass) {
+      this.initialized = true;
+      this.initializeData();
+    }
+    
+    // Atualiza a cada intervalo
     const now = Date.now();
     if (!oldHass || now - this.lastUpdateTime > 10000) { // 10 segundos
       this.updateData();
       this.render();
       this.lastUpdateTime = now;
+    }
+  }
+  
+  // Inicializa os dados com o número correto de exemplos
+  initializeData() {
+    // Determina quantos registros devem ser exibidos
+    const maxEntries = this.config.max_entries || 4;
+    
+    if (this.lightningData.length < maxEntries) {
+      const now = new Date();
+      
+      // Dados base para os exemplos
+      const baseDistance = 15.0;
+      const baseStrength = 50;
+      
+      // Cria o número correto de exemplos
+      for (let i = 0; i < maxEntries; i++) {
+        // Gera uma pequena variação para cada exemplo
+        const timeOffset = i * 300000; // 5 minutos entre cada exemplo
+        const distanceVariation = (Math.random() * 10) - 5; // +/- 5km
+        const strengthVariation = (Math.random() * 30) - 15; // +/- 15 unidades
+        
+        this.lightningData.push({
+          id: now.getTime() - timeOffset,
+          timestamp: new Date(now.getTime() - timeOffset).toISOString(),
+          distance: baseDistance + distanceVariation,
+          strength: Math.min(Math.max(baseStrength + strengthVariation, 1), 100)
+        });
+      }
+      
+      console.log(`Inicialização: ${this.lightningData.length} registros criados`);
     }
   }
 
@@ -47,43 +85,19 @@ class LightningMonitorCard extends HTMLElement {
           const distance = parseFloat(distanceObj.state);
           const strength = parseFloat(energyObj.state);
           
-          // Se não temos registros, gere um imediatamente
-          if (this.lightningData.length === 0) {
-            this.addNewLightningEvent(distance, strength);
-            
-            // Gere um segundo registro com dados ligeiramente diferentes para teste
-            setTimeout(() => {
-              this.addNewLightningEvent(
-                distance + (Math.random() * 4 - 2),  // Distância um pouco diferente
-                Math.min(strength + (Math.random() * 10 - 5), 100)  // Força um pouco diferente
-              );
-              this.render();
-            }, 100);
-            return;
-          }
-          
           // Verificar se os valores são diferentes dos últimos registrados significativamente
           const currentKey = `${Math.round(distance)}_${Math.round(strength)}`;
           const isNewValue = currentKey !== this.lastValues.key;
           
-          // Sempre adicione um novo registro se tivermos menos que o mínimo
-          if (isNewValue || this.lightningData.length < 2) {
+          if (isNewValue) {
             this.addNewLightningEvent(distance, strength);
           }
         }
       } 
       
-      // Se não tiver dados, cria exemplos
+      // Se não tiver dados reais, usa os de exemplo que foram inicializados
       if (this.lightningData.length === 0) {
-        const now = new Date();
-        
-        // Adiciona dois registros de exemplo com valores diferentes
-        this.addNewLightningEvent(8.3, 65);
-        
-        setTimeout(() => {
-          this.addNewLightningEvent(12.1, 42);
-          this.render();
-        }, 100);
+        this.initializeData();
       }
     } catch (e) {
       console.error("Erro ao processar dados:", e);
@@ -135,8 +149,7 @@ class LightningMonitorCard extends HTMLElement {
     
     // Garante que temos pelo menos um evento
     if (this.lightningData.length === 0) {
-      this.updateData();
-      return;
+      this.initializeData();
     }
     
     // Encontra o raio mais próximo e o mais forte
