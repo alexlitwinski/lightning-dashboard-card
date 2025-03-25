@@ -6,12 +6,16 @@ class LightningMonitorCard extends HTMLElement {
     this.lastValues = {}; // Para rastrear valores anteriores
     this.lastUpdateTime = 0; // Para rastrear quando o último evento foi registrado
     this.initialized = false;
+    this.demo_mode = false; // Flag para controlar o modo de demonstração
   }
 
   setConfig(config) {
     if (!config.distance_entity && !config.energy_entity && !config.entity) {
       throw new Error('Você precisa definir uma entidade');
     }
+    
+    // Adicionar opção para ativar ou desativar o modo de demonstração
+    this.demo_mode = config.demo_mode === true;
     this.config = config;
   }
 
@@ -22,7 +26,11 @@ class LightningMonitorCard extends HTMLElement {
     // Inicializar na primeira vez
     if (!this.initialized && this._hass) {
       this.initialized = true;
-      this.initializeData();
+      
+      // Só inicializa dados de demonstração se o modo estiver ativado
+      if (this.demo_mode) {
+        this.initializeDemoData();
+      }
     }
     
     // Atualiza a cada intervalo
@@ -34,35 +42,38 @@ class LightningMonitorCard extends HTMLElement {
     }
   }
   
-  // Inicializa os dados com o número correto de exemplos
-  initializeData() {
+  // Inicializa os dados de demonstração apenas quando solicitado
+  initializeDemoData() {
+    console.log("Inicializando dados de demonstração");
+    
+    // Limpa dados anteriores
+    this.lightningData = [];
+    
     // Determina quantos registros devem ser exibidos
     const maxEntries = this.config.max_entries || 4;
     
-    if (this.lightningData.length < maxEntries) {
-      const now = new Date();
+    const now = new Date();
+    
+    // Dados base para os exemplos
+    const baseDistance = 15.0;
+    const baseStrength = 50;
+    
+    // Cria o número correto de exemplos
+    for (let i = 0; i < maxEntries; i++) {
+      // Gera uma pequena variação para cada exemplo
+      const timeOffset = i * 300000; // 5 minutos entre cada exemplo
+      const distanceVariation = (Math.random() * 10) - 5; // +/- 5km
+      const strengthVariation = (Math.random() * 30) - 15; // +/- 15 unidades
       
-      // Dados base para os exemplos
-      const baseDistance = 15.0;
-      const baseStrength = 50;
-      
-      // Cria o número correto de exemplos
-      for (let i = 0; i < maxEntries; i++) {
-        // Gera uma pequena variação para cada exemplo
-        const timeOffset = i * 300000; // 5 minutos entre cada exemplo
-        const distanceVariation = (Math.random() * 10) - 5; // +/- 5km
-        const strengthVariation = (Math.random() * 30) - 15; // +/- 15 unidades
-        
-        this.lightningData.push({
-          id: now.getTime() - timeOffset,
-          timestamp: new Date(now.getTime() - timeOffset).toISOString(),
-          distance: baseDistance + distanceVariation,
-          strength: Math.min(Math.max(baseStrength + strengthVariation, 1), 100)
-        });
-      }
-      
-      console.log(`Inicialização: ${this.lightningData.length} registros criados`);
+      this.lightningData.push({
+        id: now.getTime() - timeOffset,
+        timestamp: new Date(now.getTime() - timeOffset).toISOString(),
+        distance: baseDistance + distanceVariation,
+        strength: Math.min(Math.max(baseStrength + strengthVariation, 1), 100)
+      });
     }
+    
+    console.log(`DEMO: ${this.lightningData.length} registros criados`);
   }
 
   // Gera um ângulo aleatório mas determinístico baseado no ID
@@ -76,6 +87,9 @@ class LightningMonitorCard extends HTMLElement {
     if (!this._hass) return;
     
     try {
+      // Verifica se as entidades existem
+      let dataFound = false;
+      
       // Tenta obter dados de entidades separadas
       if (this.config.distance_entity && this.config.energy_entity) {
         const distanceObj = this._hass.states[this.config.distance_entity];
@@ -85,19 +99,25 @@ class LightningMonitorCard extends HTMLElement {
           const distance = parseFloat(distanceObj.state);
           const strength = parseFloat(energyObj.state);
           
-          // Verificar se os valores são diferentes dos últimos registrados significativamente
-          const currentKey = `${Math.round(distance)}_${Math.round(strength)}`;
-          const isNewValue = currentKey !== this.lastValues.key;
-          
-          if (isNewValue) {
-            this.addNewLightningEvent(distance, strength);
+          // Verificar se são números válidos
+          if (!isNaN(distance) && !isNaN(strength)) {
+            dataFound = true;
+            
+            // Verificar se os valores são diferentes dos últimos registrados significativamente
+            const currentKey = `${Math.round(distance)}_${Math.round(strength)}`;
+            const isNewValue = currentKey !== this.lastValues.key;
+            
+            if (isNewValue) {
+              this.addNewLightningEvent(distance, strength);
+            }
           }
         }
       } 
       
-      // Se não tiver dados reais, usa os de exemplo que foram inicializados
-      if (this.lightningData.length === 0) {
-        this.initializeData();
+      // Verifica se já temos dados ou se devemos usar o modo de demonstração
+      if (!dataFound && this.lightningData.length === 0 && this.demo_mode) {
+        console.log("Nenhum dado encontrado, usando modo de demonstração");
+        this.initializeDemoData();
       }
     } catch (e) {
       console.error("Erro ao processar dados:", e);
@@ -147,20 +167,23 @@ class LightningMonitorCard extends HTMLElement {
   render() {
     if (!this._hass) return;
     
-    // Garante que temos pelo menos um evento
-    if (this.lightningData.length === 0) {
-      this.initializeData();
-    }
-    
-    // Encontra o raio mais próximo e o mais forte
-    const closestLightning = this.lightningData.reduce((prev, current) => 
-      (prev.distance < current.distance) ? prev : current, this.lightningData[0]);
-    
-    const strongestLightning = this.lightningData.reduce((prev, current) => 
-      (prev.strength > current.strength) ? prev : current, this.lightningData[0]);
+    // Verificar se temos dados
+    const hasData = this.lightningData.length > 0;
     
     // Verificar se radar deve ser mostrado
     const showRadar = this.config.show_radar !== false;
+    
+    // Obter valores extremos apenas se temos dados
+    let closestLightning = null;
+    let strongestLightning = null;
+    
+    if (hasData) {
+      closestLightning = this.lightningData.reduce((prev, current) => 
+        (prev.distance < current.distance) ? prev : current, this.lightningData[0]);
+      
+      strongestLightning = this.lightningData.reduce((prev, current) => 
+        (prev.strength > current.strength) ? prev : current, this.lightningData[0]);
+    }
     
     this.shadowRoot.innerHTML = `
       <ha-card>
@@ -320,13 +343,44 @@ class LightningMonitorCard extends HTMLElement {
             width: 14px;
             height: 14px;
           }
+          
+          .no-data-message {
+            text-align: center;
+            padding: 20px;
+            background: #f5f5f5;
+            border-radius: 8px;
+            margin: 16px 0;
+          }
+          
+          .demo-badge {
+            display: inline-block;
+            padding: 3px 8px;
+            background: #ff9800;
+            color: white;
+            border-radius: 12px;
+            font-size: 0.7rem;
+            margin-left: 8px;
+            vertical-align: middle;
+          }
         </style>
         
         <div class="card-container">
-          <h2>${this.config.name || 'Monitor de Raios'}</h2>
-          <p>${this.lightningData.length} registros encontrados</p>
+          <h2>
+            ${this.config.name || 'Monitor de Raios'}
+            ${this.demo_mode ? '<span class="demo-badge">DEMO</span>' : ''}
+          </h2>
           
-          ${showRadar ? `
+          ${hasData ? `<p>${this.lightningData.length} registros encontrados</p>` : ''}
+          
+          ${!hasData ? `
+            <div class="no-data-message">
+              <p>Nenhum dado de raio encontrado.</p>
+              <p>Verifique se as entidades estão configuradas corretamente.</p>
+              <p>Para testar o visual do componente, ative o modo de demonstração nas configurações.</p>
+            </div>
+          ` : ''}
+          
+          ${hasData && showRadar ? `
             <div class="radar-container">
               <div class="radar-circles">
                 <div class="radar-circle outer"></div>
@@ -357,36 +411,38 @@ class LightningMonitorCard extends HTMLElement {
             </div>
           ` : ''}
           
-          <div class="metrics-container">
-            <div class="metric-card closest">
-              <div class="metric-label">Raio mais próximo</div>
-              <div class="metric-value">${closestLightning.distance.toFixed(1)} km</div>
-              <div class="metric-time">${this.formatTime(closestLightning.timestamp)}</div>
+          ${hasData ? `
+            <div class="metrics-container">
+              <div class="metric-card closest">
+                <div class="metric-label">Raio mais próximo</div>
+                <div class="metric-value">${closestLightning.distance.toFixed(1)} km</div>
+                <div class="metric-time">${this.formatTime(closestLightning.timestamp)}</div>
+              </div>
+              
+              <div class="metric-card strongest">
+                <div class="metric-label">Raio mais forte</div>
+                <div class="metric-value">${strongestLightning.strength.toFixed(1)}</div>
+                <div class="metric-time">${this.formatTime(strongestLightning.timestamp)}</div>
+              </div>
             </div>
             
-            <div class="metric-card strongest">
-              <div class="metric-label">Raio mais forte</div>
-              <div class="metric-value">${strongestLightning.strength}</div>
-              <div class="metric-time">${this.formatTime(strongestLightning.timestamp)}</div>
-            </div>
-          </div>
-          
-          <h3>Registros Recentes</h3>
-          <div class="events-list">
-            ${this.lightningData.map(lightning => `
-              <div class="event-item">
-                <div class="event-details">
-                  <div class="event-header">
-                    <span class="event-distance">${lightning.distance.toFixed(1)} km</span>
-                    <span class="event-time">${this.formatTime(lightning.timestamp)}</span>
-                  </div>
-                  <div class="strength-bar">
-                    <div class="strength-level" style="width: ${lightning.strength}%;"></div>
+            <h3>Registros Recentes</h3>
+            <div class="events-list">
+              ${this.lightningData.map(lightning => `
+                <div class="event-item">
+                  <div class="event-details">
+                    <div class="event-header">
+                      <span class="event-distance">${lightning.distance.toFixed(1)} km</span>
+                      <span class="event-time">${this.formatTime(lightning.timestamp)}</span>
+                    </div>
+                    <div class="strength-bar">
+                      <div class="strength-level" style="width: ${lightning.strength}%;"></div>
+                    </div>
                   </div>
                 </div>
-              </div>
-            `).join('')}
-          </div>
+              `).join('')}
+            </div>
+          ` : ''}
         </div>
       </ha-card>
     `;
