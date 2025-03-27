@@ -1,7 +1,7 @@
 {
   "name": "Lightning Monitor Card",
   "render_readme": true,
-  "filename": "lightning-monitor-card-v19.js",
+  "filename": "lightning-monitor-card-v20.js",
   "content_in_root": true,
   "homeassistant": "2023.11.0"
 }
