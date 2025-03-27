@@ -90,8 +90,53 @@ class LightningMonitorCard extends HTMLElement {
       // Verifica se as entidades existem
       let dataFound = false;
       
-      // Tenta obter dados de entidades separadas
-      if (this.config.distance_entity && this.config.energy_entity) {
+      // CORREÇÃO: Verifica se há uma entidade principal com eventos múltiplos
+      if (this.config.entity) {
+        const entityObj = this._hass.states[this.config.entity];
+        
+        if (entityObj && entityObj.attributes && entityObj.attributes.lightning_events) {
+          dataFound = true;
+          
+          // Obter o array de eventos de raios do atributo
+          const events = entityObj.attributes.lightning_events;
+          
+          if (Array.isArray(events) && events.length > 0) {
+            // Limpa os dados anteriores para carregar o histórico completo
+            this.lightningData = [];
+            
+            // Adiciona todos os eventos do atributo
+            events.forEach(event => {
+              // Verifica se o evento tem todos os campos necessários
+              if (event.id !== undefined && 
+                  event.timestamp !== undefined && 
+                  event.distance !== undefined && 
+                  event.strength !== undefined) {
+                
+                this.lightningData.push({
+                  id: event.id,
+                  timestamp: event.timestamp,
+                  distance: parseFloat(event.distance),
+                  strength: Math.min(Math.max(parseFloat(event.strength), 1), 100)
+                });
+              }
+            });
+            
+            // Ordenar por timestamp (mais recente primeiro)
+            this.lightningData.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+            
+            // Limita a quantidade de registros
+            const maxEntries = this.config.max_entries || 4;
+            if (this.lightningData.length > maxEntries) {
+              this.lightningData = this.lightningData.slice(0, maxEntries);
+            }
+            
+            console.log(`Carregados ${this.lightningData.length} eventos de raios do atributo lightning_events`);
+          }
+        }
+      }
+      
+      // Se não encontrou dados na entidade principal, tenta obter das entidades separadas
+      if (!dataFound && this.config.distance_entity && this.config.energy_entity) {
         const distanceObj = this._hass.states[this.config.distance_entity];
         const energyObj = this._hass.states[this.config.energy_entity];
         
@@ -110,9 +155,51 @@ class LightningMonitorCard extends HTMLElement {
             if (isNewValue) {
               this.addNewLightningEvent(distance, strength);
             }
+            
+            // CORREÇÃO: Verifica se há histórico de eventos nos atributos
+            const checkAndAddEventsFromAttribute = (obj, attributeName) => {
+              if (obj.attributes && obj.attributes[attributeName] && 
+                  Array.isArray(obj.attributes[attributeName])) {
+                
+                const events = obj.attributes[attributeName];
+                events.forEach(event => {
+                  // Adiciona apenas se tiver pelo menos distância e força
+                  if (event.distance !== undefined && event.strength !== undefined) {
+                    // Gera um ID se não existir
+                    const eventId = event.id || Date.now();
+                    // Gera um timestamp se não existir
+                    const timestamp = event.timestamp || new Date().toISOString();
+                    
+                    // Verifica se este evento já existe pelo ID
+                    const eventExists = this.lightningData.some(e => e.id === eventId);
+                    
+                    if (!eventExists) {
+                      this.lightningData.push({
+                        id: eventId,
+                        timestamp: timestamp,
+                        distance: parseFloat(event.distance),
+                        strength: Math.min(Math.max(parseFloat(event.strength), 1), 100)
+                      });
+                    }
+                  }
+                });
+              }
+            };
+            
+            // Verifica os atributos das duas entidades
+            checkAndAddEventsFromAttribute(distanceObj, 'lightning_events');
+            checkAndAddEventsFromAttribute(energyObj, 'lightning_events');
+            
+            // Ordenar e limitar após adicionar novos eventos
+            this.lightningData.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+            
+            const maxEntries = this.config.max_entries || 4;
+            if (this.lightningData.length > maxEntries) {
+              this.lightningData = this.lightningData.slice(0, maxEntries);
+            }
           }
         }
-      } 
+      }
       
       // Verifica se já temos dados ou se devemos usar o modo de demonstração
       if (!dataFound && this.lightningData.length === 0 && this.demo_mode) {
