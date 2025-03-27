@@ -7,6 +7,7 @@ class LightningMonitorCard extends HTMLElement {
     this.lastUpdateTime = 0; // Para rastrear quando o último evento foi registrado
     this.initialized = false;
     this.demo_mode = false; // Flag para controlar o modo de demonstração
+    this.lastState = null; // Para rastrear o último estado das entidades
   }
 
   setConfig(config) {
@@ -33,13 +34,9 @@ class LightningMonitorCard extends HTMLElement {
       }
     }
     
-    // Atualiza a cada intervalo
-    const now = Date.now();
-    if (!oldHass || now - this.lastUpdateTime > 10000) { // 10 segundos
-      this.updateData();
-      this.render();
-      this.lastUpdateTime = now;
-    }
+    // Sempre tenta atualizar os dados quando o hass muda
+    this.updateData();
+    this.render();
   }
   
   // Inicializa os dados de demonstração apenas quando solicitado
@@ -87,58 +84,13 @@ class LightningMonitorCard extends HTMLElement {
     if (!this._hass) return;
     
     try {
-      // Verifica se as entidades existem
-      let dataFound = false;
-      
-      // CORREÇÃO: Verifica se há uma entidade principal com eventos múltiplos
-      if (this.config.entity) {
-        const entityObj = this._hass.states[this.config.entity];
+      // Verifica se as entidades de distância e energia existem
+      if (this.config.distance_entity && this.config.energy_entity) {
+        const distanceEntity = this.config.distance_entity;
+        const energyEntity = this.config.energy_entity;
         
-        if (entityObj && entityObj.attributes && entityObj.attributes.lightning_events) {
-          dataFound = true;
-          
-          // Obter o array de eventos de raios do atributo
-          const events = entityObj.attributes.lightning_events;
-          
-          if (Array.isArray(events) && events.length > 0) {
-            // Limpa os dados anteriores para carregar o histórico completo
-            this.lightningData = [];
-            
-            // Adiciona todos os eventos do atributo
-            events.forEach(event => {
-              // Verifica se o evento tem todos os campos necessários
-              if (event.id !== undefined && 
-                  event.timestamp !== undefined && 
-                  event.distance !== undefined && 
-                  event.strength !== undefined) {
-                
-                this.lightningData.push({
-                  id: event.id,
-                  timestamp: event.timestamp,
-                  distance: parseFloat(event.distance),
-                  strength: Math.min(Math.max(parseFloat(event.strength), 1), 100)
-                });
-              }
-            });
-            
-            // Ordenar por timestamp (mais recente primeiro)
-            this.lightningData.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-            
-            // Limita a quantidade de registros
-            const maxEntries = this.config.max_entries || 4;
-            if (this.lightningData.length > maxEntries) {
-              this.lightningData = this.lightningData.slice(0, maxEntries);
-            }
-            
-            console.log(`Carregados ${this.lightningData.length} eventos de raios do atributo lightning_events`);
-          }
-        }
-      }
-      
-      // Se não encontrou dados na entidade principal, tenta obter das entidades separadas
-      if (!dataFound && this.config.distance_entity && this.config.energy_entity) {
-        const distanceObj = this._hass.states[this.config.distance_entity];
-        const energyObj = this._hass.states[this.config.energy_entity];
+        const distanceObj = this._hass.states[distanceEntity];
+        const energyObj = this._hass.states[energyEntity];
         
         if (distanceObj && energyObj) {
           const distance = parseFloat(distanceObj.state);
@@ -146,104 +98,59 @@ class LightningMonitorCard extends HTMLElement {
           
           // Verificar se são números válidos
           if (!isNaN(distance) && !isNaN(strength)) {
-            dataFound = true;
-            
-            // Verificar se os valores são diferentes dos últimos registrados significativamente
-            const currentKey = `${Math.round(distance)}_${Math.round(strength)}`;
-            const isNewValue = currentKey !== this.lastValues.key;
-            
-            if (isNewValue) {
-              this.addNewLightningEvent(distance, strength);
-            }
-            
-            // CORREÇÃO: Verifica se há histórico de eventos nos atributos
-            const checkAndAddEventsFromAttribute = (obj, attributeName) => {
-              if (obj.attributes && obj.attributes[attributeName] && 
-                  Array.isArray(obj.attributes[attributeName])) {
-                
-                const events = obj.attributes[attributeName];
-                events.forEach(event => {
-                  // Adiciona apenas se tiver pelo menos distância e força
-                  if (event.distance !== undefined && event.strength !== undefined) {
-                    // Gera um ID se não existir
-                    const eventId = event.id || Date.now();
-                    // Gera um timestamp se não existir
-                    const timestamp = event.timestamp || new Date().toISOString();
-                    
-                    // Verifica se este evento já existe pelo ID
-                    const eventExists = this.lightningData.some(e => e.id === eventId);
-                    
-                    if (!eventExists) {
-                      this.lightningData.push({
-                        id: eventId,
-                        timestamp: timestamp,
-                        distance: parseFloat(event.distance),
-                        strength: Math.min(Math.max(parseFloat(event.strength), 1), 100)
-                      });
-                    }
-                  }
-                });
-              }
+            // Gera um identificador único para o estado atual das duas entidades
+            const currentState = {
+              distance: distance,
+              strength: strength,
+              lastUpdate: distanceObj.last_updated || energyObj.last_updated || new Date().toISOString()
             };
             
-            // Verifica os atributos das duas entidades
-            checkAndAddEventsFromAttribute(distanceObj, 'lightning_events');
-            checkAndAddEventsFromAttribute(energyObj, 'lightning_events');
+            // Compara se o estado atual é diferente do último estado registrado
+            const isDifferentState = 
+              !this.lastState || 
+              Math.abs(currentState.distance - this.lastState.distance) > 0.1 || 
+              Math.abs(currentState.strength - this.lastState.strength) > 0.1;
             
-            // Ordenar e limitar após adicionar novos eventos
-            this.lightningData.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-            
-            const maxEntries = this.config.max_entries || 4;
-            if (this.lightningData.length > maxEntries) {
-              this.lightningData = this.lightningData.slice(0, maxEntries);
+            // Se o estado for diferente, adiciona um novo evento
+            if (isDifferentState) {
+              console.log(`Novo estado detectado: ${distance}km / ${strength}`);
+              
+              // Adiciona o novo evento apenas se a distância for um valor razoável (não 0 ou valor negativo)
+              if (distance > 0) {
+                const now = new Date();
+                
+                // Adiciona o evento ao início do array
+                this.lightningData.unshift({
+                  id: now.getTime(),
+                  timestamp: now.toISOString(),
+                  distance: distance,
+                  strength: Math.min(Math.max(strength, 1), 100)
+                });
+                
+                // Atualiza o último estado
+                this.lastState = currentState;
+                
+                // Limita a quantidade de registros
+                const maxEntries = this.config.max_entries || 4;
+                if (this.lightningData.length > maxEntries) {
+                  this.lightningData = this.lightningData.slice(0, maxEntries);
+                }
+                
+                console.log(`Registrado novo evento de raio: ${distance}km / ${strength}`);
+              }
             }
           }
         }
       }
       
       // Verifica se já temos dados ou se devemos usar o modo de demonstração
-      if (!dataFound && this.lightningData.length === 0 && this.demo_mode) {
+      if (this.lightningData.length === 0 && this.demo_mode) {
         console.log("Nenhum dado encontrado, usando modo de demonstração");
         this.initializeDemoData();
       }
     } catch (e) {
       console.error("Erro ao processar dados:", e);
     }
-  }
-  
-  // Função auxiliar para adicionar um novo evento de raio
-  addNewLightningEvent(distance, strength) {
-    const now = new Date();
-    const currentTimestamp = now.getTime();
-    
-    // Limitação do valor de força para no máximo 100
-    const limitedStrength = Math.min(Math.max(strength, 1), 100);
-    
-    // Adiciona um novo evento no início do array
-    const newEvent = {
-      id: currentTimestamp,
-      timestamp: now.toISOString(),
-      distance: distance,
-      strength: limitedStrength
-    };
-    
-    this.lightningData.unshift(newEvent);
-    
-    // Atualiza os últimos valores registrados
-    this.lastValues = {
-      key: `${Math.round(distance)}_${Math.round(strength)}`,
-      distance: distance,
-      strength: limitedStrength,
-      timestamp: currentTimestamp
-    };
-    
-    // Limita a quantidade de registros
-    const maxEntries = this.config.max_entries || 4;
-    if (this.lightningData.length > maxEntries) {
-      this.lightningData = this.lightningData.slice(0, maxEntries);
-    }
-    
-    console.log(`Novo evento de raio: ${distance}km / ${limitedStrength}`);
   }
 
   formatTime(timestamp) {
