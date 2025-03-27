@@ -401,10 +401,7 @@ if (!customElements.get('lightning-monitor-card')) {
           }
           
           this.render();
-        } else {
-          // Se não conseguiu extrair eventos, usa dados conhecidos
-          this.useKnownHistoricalData();
-        }
+        } 
         
       } catch (e) {
         console.error("[Lightning Card] Erro ao processar dados históricos:", e);
